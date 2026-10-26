@@ -29,12 +29,14 @@ webhookQueue.on('error', (err) => {
     console.error('[webhook-queue] error:', err.message);
 });
 
+export const webhookJobId = (eventId: number): string => `webhook-event-${eventId}`;
+
 // Called from the webhook controller, right after we save the event to
 // MySQL and right before we answer Shopify with 200.
 export async function enqueueWebhookEvent(eventId: number): Promise<void> {
     await webhookQueue.add(
         'process',
         { eventId },
-        { jobId: `webhook-event-${eventId}` }, // stops the SAME row being queued twice
+        { jobId: webhookJobId(eventId) }, // stops the SAME row being queued twice
     );
 }

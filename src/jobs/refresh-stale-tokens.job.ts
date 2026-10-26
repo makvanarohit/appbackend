@@ -1,5 +1,5 @@
 import { CronJob } from 'cron';
-import { findShopsWithExpiringRefreshToken } from '../repositories/store.repository';
+import { findShopsWithExpiringRefreshToken, markExpiredRefreshTokens } from '../repositories/store.repository';
 import { forceRefresh } from '../services/store.service';
 
 const WITHIN_DAYS = 14; // touch any shop whose refresh token dies within 2 weeks
@@ -10,6 +10,14 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function refreshStaleTokens(): Promise<void> {
+
+    // A shop whose refresh token has already ended cannot be repaired here (we have no ID token).
+    // Mark it ONCE, so it shows up in the "broken shops" query, and do not try it every night.
+    const marked = await markExpiredRefreshTokens();
+    if (marked > 0) {
+        console.warn(`[refresh-stale-tokens] ${marked} shop(s) have an expired refresh token; the merchant must open the app again`);
+    }
+
     const shopDomains = await findShopsWithExpiringRefreshToken(WITHIN_DAYS);
     if (shopDomains.length === 0) return;
 
@@ -31,6 +39,7 @@ export function scheduleRefreshStaleTokensJob(): CronJob {
         cronTime: '0 3 * * *',
         onTick: refreshStaleTokens,
         start: true,
+        waitForCompletion: true, // stop() waits for a run that is busy right now
         errorHandler: (err) => {
             console.error('[refresh-stale-tokens] job crashed:', err);
         },

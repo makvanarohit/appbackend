@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { verifySessionToken } from '../middleware/verify-session-token';
 import { initializeStore } from '../middleware/initialize-store';
 import { getCurrentShop, completeOnboarding, fetchShopFromAdminApi } from '../controllers/store.controller';
+import { env } from '../config/env';
 
 const router = Router();
 
@@ -15,6 +16,9 @@ router.get('/', initializeStore, getCurrentShop);
 
 // All other routes: verify only. They never create the store or exchange tokens.
 router.patch('/onboarding', completeOnboarding);
-router.get('/me/admin-api-example', fetchShopFromAdminApi);
+// The example returns a raw Shopify answer, so it exists only where error details are shown (local and development).
+if (env.exposeErrorDetails) {
+    router.get('/me/admin-api-example', fetchShopFromAdminApi);
+}
 
 export default router;

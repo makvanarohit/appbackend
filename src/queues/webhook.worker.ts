@@ -23,10 +23,15 @@ export function startWebhookWorker(): Worker<WebhookJobData> {
     });
 
     worker.on('failed', (job, err) => {
-        // BullMQ will retry this on its own (5 attempts, growing delay —
-        // configured on the queue side), so this log is informational, not
-        // a dead end.
-        console.error(`[webhook-worker] failed: event ${job?.data.eventId}`, err.message);
+        const eventId = job?.data.eventId;
+        const maxTries = job?.opts.attempts ?? 1;
+        if (job && job.attemptsMade >= maxTries) {
+            // The queue used its last try. The sweeper tries this event again later (see
+            // requeueFailedWebhooks), but someone should look at it.
+            console.error(`[webhook-worker] GAVE UP on event ${eventId} after ${job.attemptsMade} tries: ${err.message}`);
+            return;
+        }
+        console.error(`[webhook-worker] failed: event ${eventId} (try ${job?.attemptsMade} of ${maxTries}, will try again)`, err.message);
     });
 
     worker.on('error', (err) => {

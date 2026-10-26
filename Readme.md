@@ -85,7 +85,7 @@ src/
     shopify-auth.service.ts    ID token check, token exchange, refresh, encrypt and decrypt
     store.service.ts           Redis lock, ensure and refresh tokens, callAdminApi
     standalone-auth.service.ts Tokens for local testing only
-    shop-details.service.ts    Reads the shop's name, time zone, plan from Shopify and saves them
+\1    app-installation.service.ts  Asks Shopify if the app is still installed (used by shop/redact)\n    order-webhook.service.ts   Handlers for the order webhooks and themes/update (your own logic goes here)
     webhook.service.ts         Save and process webhooks
   repositories/
     store.repository.ts    All SQL queries
@@ -162,7 +162,7 @@ copy the one you need into `.env` (or put the same values in your server's setti
 | `APP_HOST` | yes | Public host of this backend, **without** `https://` |
 | `DB_HOST`, `DB_USER`, `DB_NAME` | yes | MySQL connection |
 | `DB_PORT` | no (3306) | MySQL port |
-| `DB_PASSWORD` | no (empty) | MySQL password |
+| `DB_PASSWORD` | no (empty) on `local` and `development`, **required** on `staging` and `production` | MySQL password. The app does not start on a real server without it |
 | `TOKEN_ENCRYPTION_KEY` | yes | 32-byte key (base64). Encrypts tokens in MySQL |
 | `TOKEN_ENCRYPTION_KEY_ID` | no (`v1`) | Name of the active key. Change it when you rotate the key |
 | `TOKEN_ENCRYPTION_OLD_KEYS` | no | Old keys, only to read old tokens. Format: `v1=base64key,v0=base64key` |
@@ -448,8 +448,7 @@ We wait at most **10 seconds** for Shopify to answer the exchange. After that th
 | **404** | `GET /api/auth/standalone-token` outside `local`, or the shop is missing | Check the environment, or call `GET /api/store` first |
 | **409** | The shop or its token is not set up yet | Call `GET /api/store`, then try again |
 | **429** | Too many requests from one IP (rate limit) | Wait the number of seconds in the `Retry-After` header, then try again |
-| **502** | Shopify still said 401 after we refreshed the token | Show "Please reopen the app" |
-| **504** | Shopify did not answer in time (15 seconds for an Admin API call, 10 seconds for the token exchange) | Show "Shopify is slow, try again later". For `GET /api/store`, try it again |
+\1| **502** or **429** | Shopify answered an Admin API call with an error status (for example 403 or 5xx gives 502, and 429 means too many calls) | Show a message and try again later. For 429, wait a bit |\n| **503** | Another request is refreshing the token and did not finish in time | Try again in a moment |\n| **504** | Shopify did not answer in time (15 seconds for an Admin API call, 10 seconds for the token exchange) | Show "Shopify is slow, try again later". For `GET /api/store`, try it again |
 | **500** | Any other error | In `local` and `development` the message is shown. In `staging` and `production` it is always `Internal server error`. See the server log |
 
 ### Log lines for errors
@@ -461,7 +460,7 @@ Every error that reaches `middleware/error-handler.ts` writes **one** entry in t
 | `[http] 409 PATCH /api/store/onboarding shop=abc.myshopify.com - Store is not set up yet. ...` | warning | An **expected** answer (any 4xx, for example 409, 400 bad JSON, 413 body too big). One short line, **no stack** |
 | `[http] 500 GET /api/store shop=abc.myshopify.com` and then the error with its stack | error | A **real problem** (5xx, including 502 and 504 from Shopify). Look at it |
 
-- The log never contains the query string (it can hold private data).
+- The log never contains the query string (it can hold private data). This is true for the error lines and for the request log (it shows the path only).
 - A **401** from the login check and a **429** from the rate limit are answered directly. They never reach the error handler, so they are not logged there.
 - The answer the caller gets is not changed by this.
 
@@ -512,6 +511,14 @@ Every error that reaches `middleware/error-handler.ts` writes **one** entry in t
   - `...merchant must reopen the app` means the connection is really broken.
   - `...: retry` means Shopify was busy or not reachable. It tries again later.
 
+Details of the refresh that are good to know:
+
+- **Saving the new tokens.** Shopify keeps the refresh token you presented usable until you use the newer one (at most 30 days after its first use, and never past its 90 day end). So if the database fails while we save new tokens, the shop is **not** locked out: the next refresh uses the refresh token we still hold. We still try the save 3 times (after 0.3 and 1 second), so the newest tokens are kept. If all 3 fail, the log says `the new tokens for ... could NOT be saved`. Do not run a token exchange and a refresh for the same shop at the same time (the Redis lock stops this).
+- **If Shopify sends no refresh token** in a refresh answer, the saved refresh token is kept (it is never replaced with an empty value). An answer **without an access token** is an error and nothing is saved.
+- **Waiting for another request.** If another request is already refreshing, this request waits up to 5 seconds. If the token is still not fresh after that, it tries once itself. If the lock is still taken, it answers 503. It never hands out an expired token.
+- **Shopify errors in `callAdminApi`.** Any HTTP error from Shopify (400 or higher, except 401) is now an error: 429 stays 429, everything else becomes 502. A 401 is handled by a refresh, as before.
+- **ID token checks.** The token must have `exp` and `nbf`, and its shop name must be `<name>.myshopify.com`.
+
 ### 7.9 Uninstall and reinstall
 
 ```text
@@ -533,7 +540,7 @@ Every error that reaches `middleware/error-handler.ts` writes **one** entry in t
 
 - On `app/uninstalled`, the tokens are erased and the shop is marked `uninstalled`.
 - Shopify does not promise the order of webhooks. A late uninstall webhook that is **older** than the last install is ignored, so it cannot erase new tokens. A refresh is not an install, so it does not move `last_installed_at`. A refresh that finishes after the shop was uninstalled saves nothing.
-- About 48 hours after an uninstall, Shopify sends `shop/redact`. We delete the shop row **only** if the shop is `uninstalled` or `pending`. If the merchant already came back, the row is kept.
+- About 48 hours after an uninstall, Shopify sends `shop/redact`. If our database says the shop is `uninstalled` or `pending`, we delete it. If the database says `installed` (or `reinstalled`), we **ask Shopify first**, with the tokens we saved: one small API call, and if that gets a 401 we try to refresh the token. If Shopify accepts the token, the app is installed (for example the merchant installed again and uses it), so we **keep** the shop. If Shopify refuses both tokens (or we have no token), the app is gone (the uninstall webhook was lost), so we delete the shop. If we cannot tell (Shopify busy, network problem), we delete nothing and the event is tried again later.
 
 ### 7.10 Shop details (name, time zone, plan)
 
@@ -633,9 +640,11 @@ Webhooks come to `POST /webhooks`. This route reads the **raw text** body, becau
 | Topic (as stored) | What the code does |
 |---|---|
 | `APP_UNINSTALLED` | Marks the shop `uninstalled` and erases the tokens (ignored if older than the last install) |
-| `SHOP_REDACT` | Deletes the shop row if it is `uninstalled` or `pending` (this also deletes its webhook rows) |
+| `SHOP_REDACT` | Deletes the shop row (and its webhook rows) when the shop is `uninstalled` or `pending`. When the database says `installed`, it asks Shopify first (see 7.9): keeps the shop if the app is in use, deletes it if Shopify says the app is gone, and tries again later if Shopify cannot be reached |
 | `CUSTOMERS_DATA_REQUEST` | Writes a log line (the app stores no customer data today), then wipes the saved payload |
 | `CUSTOMERS_REDACT` | Writes a log line (the app stores no customer data today), then wipes the saved payload |
+| `ORDERS_CREATE`, `ORDERS_UPDATED`, `ORDERS_FULFILLED`, `ORDERS_CANCELLED` | Writes one log line (order number and id only), then **wipes the saved payload**, because an order can hold personal data. Your own logic goes in `services/order-webhook.service.ts` (see 8.6) |
+| `THEMES_UPDATE` | Writes one log line (theme name, id and role). A theme has no customer data, so the payload is kept |
 | `SHOP_UPDATE` | Reads the shop details again from Shopify and saves them (see 7.10). Skipped quietly if the shop has no token |
 | any other topic | Nothing to do. Marked `completed` |
 
@@ -649,8 +658,8 @@ The library writes topics in capital letters with underscores: `app/uninstalled`
 |---|---|
 | Redis is down when a webhook arrives | We already said 200. The row stays `received`. The **sweeper** (every 2 minutes) finds rows older than 5 minutes and queues them again |
 | The worker fails | BullMQ tries 5 times in total (2s, 4s, 8s, 16s between tries). The row shows `failed` with the error text |
-| All 5 tries failed | The row stays `failed`. **Nothing tries again by itself.** Look at it and fix it by hand (SQL below) |
-| A webhook comes for a shop we do not know | It is logged and ignored. The answer is still 200 |
+| All 5 tries failed | The log says `[webhook-worker] GAVE UP on event N`. The sweeper then tries the event again: once every 10 minutes, at most 6 times, only while the event is less than 6 hours old (the counters are in Redis). After that the log says `[requeue-failed-webhooks] GAVE UP ... for good`, and the row stays `failed` for you to look at (SQL below) |
+\1| `shop/redact` and Shopify cannot be reached | The shop is **not** deleted, the event is not marked `completed`, and the queue tries again (then the sweeper, for about an hour). If it still fails, the log says `GAVE UP`, and you must look at it (the redact must be done within the time Shopify requires) |\n| A webhook comes for a shop we do not know | It is logged and ignored. The answer is still 200 |
 | A row is still `received` or `processing` after 90 days | The cleanup job deletes it and writes a **WARNING** to the log. If it was a privacy webhook, that request was missed. Watch your logs |
 
 Find events that need a person:
@@ -668,6 +677,41 @@ Webhooks need the public tunnel address. You can send test webhooks with the Sho
 
 Webhook subscriptions (which topics we get) are set in the Shopify app configuration, not in this repo. The three privacy topics `customers/data_request`, `customers/redact` and `shop/redact` must be set.
 
+### 8.6 Order and theme webhooks
+
+Topics we handle: `orders/create`, `orders/updated`, `orders/fulfilled`, `orders/cancelled`, `themes/update`.
+Careful with the names: it is `orders/updated` and `orders/cancelled` (with "d"), but `orders/create` (without).
+
+**What the code does today:** it saves the event, answers 200, and the worker handles it. For orders it writes one log line, for example `[orders] created: shop=abc.myshopify.com #1001 (id 1234567890123)`, and then wipes the saved payload. For a theme it writes one log line. Nothing else is saved yet. The functions `onOrderCreated`, `onOrderUpdated`, `onOrderFulfilled`, `onOrderCancelled` and `handleThemeUpdateWebhook` in `src/services/order-webhook.service.ts` are the places for your own logic. They get a small, safe summary of the order (`id`, `name`, dates, statuses and the note attributes as `{ name: value }`). A delivery date picked on the cart page is usually in `attributes`.
+
+**Shopify app configuration** (`shopify.app.toml`). Add the scopes to your existing list, add the two blocks, then run `shopify app deploy`:
+
+```toml
+[access_scopes]
+scopes = "<your current scopes>,read_orders,read_themes"
+
+[[webhooks.subscriptions]]
+topics = [ "orders/create", "orders/updated", "orders/fulfilled", "orders/cancelled" ]
+uri = "/webhooks"
+include_fields = [ "id", "admin_graphql_api_id", "name", "created_at", "updated_at", "cancelled_at", "cancel_reason", "fulfillment_status", "financial_status", "note_attributes", "line_items" ]
+
+[[webhooks.subscriptions]]
+topics = [ "themes/update" ]
+uri = "/webhooks"
+```
+
+Notes:
+
+- **`include_fields` keeps customer data out.** Without it, Shopify sends the whole order (name, email, phone, address). With it, we only get the fields we need, and the payload stays small. Remove `line_items` if your picker saves the date only in the cart attributes (`note_attributes`).
+- **Merchants must approve new scopes.** Shops that already installed the app see a request in their admin.
+- **Protected customer data.** Forum and third-party posts say order webhooks can fail, or arrive with empty customer fields, if the app has no approval for protected customer data. Check in the Partner Dashboard (your app, API access, Protected customer data access). We could not confirm the exact rule on Shopify's own pages.
+- **If you start saving order data linked to a customer**, `customers/data_request` and `customers/redact` must really export and delete that data. Today they only write a log line. Shopify sends these two to apps that have access to customer or order data.
+- **`orders/updated` is very frequent**, and Shopify does not promise the order of webhooks. Each event is one MySQL row and one queue job (cleaned after 30 days). When you save order data, compare `updatedAt` and ignore an event that is older than what you have.
+- **Partial fulfillment.** `orders/fulfilled` is for fulfilled orders. If you also need partly fulfilled orders, check Shopify's topic list for a separate topic.
+- **Body size.** `POST /webhooks` accepts up to **5 MB** (`WEBHOOK_BODY_LIMIT` in `routes/webhook.routes.ts`). A refused body counts as a failed request in the webhook rate limit, so keep this limit above your biggest order.
+- **`themes/publish`.** `themes/update` fires when a theme changes. To know when the merchant switches to another main theme (and the date picker block must be added again), also subscribe to `themes/publish` and add a case for `THEMES_PUBLISH`.
+- **Failed events keep their payload.** If a handler fails all its tries, the payload stays in MySQL (up to 90 days), because the retries need it. This is one more reason to use `include_fields`.
+
 ---
 
 ## 9. Background jobs
@@ -676,8 +720,8 @@ All jobs start in `server.ts`. The times use the **server's time zone**.
 
 | Job | When | What it does |
 |---|---|---|
-| `refresh-stale-tokens` | every day 03:00 | Refreshes the token of shops whose refresh token ends within 14 days. Waits 250 ms between shops |
-| `requeue-stuck-webhooks` | every 2 minutes | Queues again the events that stayed `received` for more than 5 minutes |
+| `refresh-stale-tokens` | every day 03:00 | First marks, once, every shop whose refresh token has already ended (`last_token_exchange_status = failed`, "the merchant must open the app again"). Then refreshes the token of shops whose refresh token ends within the next 14 days (not the ones that already ended). Waits 250 ms between shops |
+| `requeue-stuck-webhooks` | every 2 minutes | Queues again the events that stayed `received` for more than 5 minutes. Also queues again `failed` events (every 10 minutes, at most 6 times, only if less than 6 hours old) |
 | `cleanup-webhook-events` | every day 04:00 | Deletes `completed` events older than 30 days. Deletes `failed`, `received` and `processing` events older than 90 days (and warns about the last two) |
 
 The webhook worker (5 jobs at the same time) runs inside the same process as the web server.
@@ -686,7 +730,7 @@ The webhook worker (5 jobs at the same time) runs inside the same process as the
 
 When the server gets `SIGINT` or `SIGTERM`, it stops in this order:
 
-1. It stops the 3 cron jobs, so no new run starts.
+1. It stops the 3 cron jobs: no new run starts, and a run that is busy right now is finished first (`waitForCompletion`).
 2. It stops the web server (no new connections, running requests may finish) and the webhook worker (the job it is running now is finished, no new job is taken).
 3. It closes the queue, the Redis connections and the MySQL pool. Then it exits with code 0.
 
@@ -744,11 +788,11 @@ All times are saved in **UTC**. The MySQL pool uses `timezone: 'Z'` and sets `ti
 | Route | Who calls it | How it is checked | Notes |
 |---|---|---|---|
 | `GET /health` | anyone | nothing | "The process is running." Returns `{"status":"ok"}`. It never checks MySQL or Redis, on purpose. Use it to decide if the app must be restarted |
-| `GET /ready` | anyone | nothing | "The app can do its work." Checks MySQL and Redis (2 seconds at most for each). Answers 200 `ready`, or 503 `not_ready` with `mysql` and `redis` each `ok` or `down`. The answer is kept for 3 seconds. Use it for a load balancer |
+| `GET /ready` | anyone | nothing | "The app can do its work." Checks MySQL and the three Redis connections (locks, queue, webhook worker), 2 seconds at most for each. Answers 200 `ready`, or 503 `not_ready` with `mysql` and `redis` each `ok` or `down`. The answer is kept for 3 seconds. Use it for a load balancer |
 | `POST /webhooks` | Shopify | HMAC signature | Raw body. See section 8 |
 | `GET /api/store` | React app | ID token, then `initializeStore` | **First API.** Creates the shop, does the token exchange, and reads the shop details (7.10). Returns store info |
 | `PATCH /api/store/onboarding` | React app | ID token | Marks onboarding done. Answers 409 if the shop row does not exist yet |
-| `GET /api/store/me/admin-api-example` | React app | ID token | Example of a safe Admin API call with `callAdminApi` |
+| `GET /api/store/me/admin-api-example` | React app | ID token | Example of a safe Admin API call with `callAdminApi`. It exists **only** in `local` and `development` (it returns a raw Shopify answer) |
 | `GET /api/auth/standalone-token` | React app (local only) | ID token (real session only) | 404 unless `APP_ENV=local` |
 | `POST /api/auth/standalone/revoke` | React app or Postman | ID token or standalone token | Makes all old standalone tokens invalid |
 
@@ -867,12 +911,13 @@ It does **not** work for live data, such as "how many slots are left on this dat
 
 - Every `/api` route checks the ID token: HS256 signature with the client secret, the `aud` claim equals our client ID, 10 seconds of clock difference allowed, and `iss` and `dest` must have the same host.
 - Webhooks are checked with the HMAC signature before we read them.
+- The ID token must have `exp` and `nbf`, and its shop must be `<name>.myshopify.com`.
 - Rate limits are on `/api` and `/webhooks`. `TRUST_PROXY` must match the real number of proxies in front of the server.
 - Tokens are encrypted in MySQL (AES-256-GCM). The key is only in the environment.
 - Standalone tokens exist **only** when `APP_ENV=local`.
 - In `staging` and `production`, errors never show their message to the caller.
 - Security headers (helmet) are on. Only Shopify Admin may put the app in an iframe (`frame-ancestors`).
-- Webhook payloads with personal data are wiped after they are handled, and job data in Redis holds only a row id.
+- Webhook payloads with personal data (customer privacy topics and orders) are wiped after they are handled, and job data in Redis holds only a row id.
 - `.env` files are ignored by git. **Do not commit them, and do not put them in zip files you share.**
 - Use **different** keys, secrets and Shopify credentials for staging and production.
 
@@ -885,11 +930,20 @@ It does **not** work for live data, such as "how many slots are left on this dat
 - Only `.env` is read. `.env.local`, `.env.development`, `.env.staging` and `.env.production` are notes, not auto-loaded files (section 5).
 - There are two ways to save tokens. A **refresh** uses `saveRefreshedTokens`: it changes only the tokens and the token health columns. It never changes `installation_status`, `last_installed_at` or `last_seen_at`, and it never saves tokens for an uninstalled shop. A **new token exchange** (first install, reinstall, or the fallback when the refresh token is dead) uses `saveOfflineToken`, which counts as an install and moves `last_installed_at`.
 - The webhook sweeper only picks up `received` rows. A webhook that failed all 5 tries stays `failed` until you look at it.
+- The server keeps idle connections open for 65 seconds (`keepAliveTimeout`), longer than the usual 60 second timeout of a load balancer. Node's own default is 5 seconds, which can cause random 502 errors behind a load balancer.
 - `GET /health` only says the process is running (on purpose, so a short MySQL or Redis problem does not restart a healthy server). Use `GET /ready` to check MySQL and Redis.
-- Webhook bodies bigger than 100 KB are refused with **413** (the default limit of the text parser on `POST /webhooks`). Shopify would see an error and retry.
 - The worker and the cron jobs run inside the web server process. If you run several copies of the server, every copy runs the cron jobs. This is safe today (locks and unique job ids stop double work), but it is wasted work.
 
 ### To do later
+
+Found by the audit of 15 October 2026 and **not done on purpose** (they are not bugs today):
+
+- **Several server copies.** The cron jobs, the worker and the rate limit counters run inside every copy. With 2 or more copies the jobs run twice. Before you scale out, run the cron jobs through BullMQ repeatable jobs (or a Redis lock) and use a Redis store for the rate limit.
+- **A new exchange that ends after an uninstall.** `saveOfflineToken` has no uninstall check (the refresh save has one). The window is a few seconds and Shopify refuses exchanges for uninstalled apps, so the risk is small.
+- **Two exchanges at nearly the same time.** After a 10 second timeout, a late answer from Shopify can retire the token of a second exchange. This needs Shopify to be more than 10 seconds late.
+- **Rate limit per shop** (today it is per IP, and merchants can share an IP).
+- **Better logging** (pino with redaction and request ids) and an error tracker.
+- **Database TLS** (needs the settings of your database host).
 
 - A migration tool (today the SQL files are run by hand).
 - Automated tests (a test with a real MySQL would catch SQL mistakes that TypeScript cannot see).
@@ -897,5 +951,4 @@ It does **not** work for live data, such as "how many slots are left on this dat
 - A Docker Compose file for MySQL and Redis, to make local setup easier.
 - Real deletion code for `CUSTOMERS_DATA_REQUEST` and `CUSTOMERS_REDACT` once customer data is stored.
 - Check the shop query (section 7.10) in Shopify's GraphiQL with your API version once. Shopify's docs for newer versions list `plan.publicDisplayName` instead of `plan.shopifyPlus`.
-- Raise the webhook body limit (for example `text({ type: '*/*', limit: '1mb' })`).
 - A `typecheck` script, and replace `ts-node-dev` with `tsx` (it brings 3 high-severity warnings in `npm audit`, in dev tools only).

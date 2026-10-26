@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { pool } from '../config/database';
 import { redisClient } from '../config/redis';
-import { queueConnection } from '../config/queue-redis';
+import { queueConnection, workerConnection } from '../config/queue-redis';
 
 // GET /health  (in app.ts) only says "the process is running". Use it to decide if the
 //              app must be RESTARTED. It never checks MySQL or Redis, so a short MySQL or
@@ -44,11 +44,12 @@ async function checkMysql(): Promise<unknown> {
     return pool.query('SELECT 1');
 }
 
-// Both Redis connections must work: the one for locks, and the one for the webhook queue.
+// All Redis connections must work: locks, the webhook queue, and the webhook worker.
 async function checkRedis(): Promise<void> {
     if (!redisClient.isReady) throw new Error('the Redis client is not connected');
     await redisClient.ping();
     await queueConnection.ping();
+    await workerConnection.ping(); // if this one is dead, the webhook worker takes no jobs
 }
 
 async function runChecks(): Promise<ReadinessAnswer> {

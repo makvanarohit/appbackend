@@ -128,7 +128,8 @@ export const env = {
         host: required('DB_HOST'),
         port: intFromEnv('DB_PORT', 3306, 1, 65535),
         user: required('DB_USER'),
-        password: process.env.DB_PASSWORD ?? '',
+        // A real server must never start without a database password.
+        password: appEnv === 'staging' || appEnv === 'production' ? required('DB_PASSWORD') : (process.env.DB_PASSWORD ?? ''),
         database: required('DB_NAME'),
     },
 

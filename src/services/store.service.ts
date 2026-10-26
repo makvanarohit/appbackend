@@ -42,6 +42,30 @@ export class AdminApiTimeoutError extends Error {
     }
 }
 
+// Thrown when Shopify answers an Admin API call with an error status (400 or higher, except 401,
+// which is handled by a token refresh). 429 stays 429 (too many calls); everything else is 502.
+export class AdminApiRequestError extends Error {
+    status: number;
+    constructor(shopDomain: string, shopifyStatus: number) {
+        super(`Shopify answered HTTP ${shopifyStatus} for ${shopDomain}`);
+        this.status = shopifyStatus === 429 ? 429 : 502;
+    }
+}
+
+// Thrown when another request is refreshing the token and does not finish in time.
+// status 503 = "try again in a moment".
+export class TokenRefreshBusyError extends Error {
+    status = 503;
+    constructor(shopDomain: string) {
+        super(`The token refresh for ${shopDomain} is still running in another request`);
+    }
+}
+
+// Shopify says the saved refresh token cannot be used any more (answer 401: unknown, replaced, expired,
+// revoked, or the app is uninstalled; Shopify does not say which, and we do not need to know).
+// Only a new token exchange with a fresh ID token (the merchant opening the app) can repair it.
+export class ReauthorizationRequiredError extends Error { }
+
 function isExpiringSoon(expiresAt: Date | null): boolean {
     return expiresAt !== null && expiresAt.getTime() - Date.now() < EXPIRY_BUFFER_MS;
 }
@@ -125,19 +149,44 @@ export async function ensureOfflineToken(shopDomain: string, idToken: string): P
         }
 
         const tokenResult = await exchangeOfflineToken(shopDomain, idToken);
-        await saveOfflineToken({
-            shopDomain,
-            accessTokenEncrypted: encryptToken(tokenResult.accessToken),
-            accessTokenExpiresAt: tokenResult.expiresAt,
-            refreshTokenEncrypted: tokenResult.refreshToken ? encryptToken(tokenResult.refreshToken) : null,
-            refreshTokenExpiresAt: tokenResult.refreshTokenExpiresAt,
-        });
+        await saveWithRetry(shopDomain, () =>
+            saveOfflineToken({
+                shopDomain,
+                accessTokenEncrypted: encryptToken(tokenResult.accessToken),
+                accessTokenExpiresAt: tokenResult.expiresAt,
+                refreshTokenEncrypted: tokenResult.refreshToken ? encryptToken(tokenResult.refreshToken) : null,
+                refreshTokenExpiresAt: tokenResult.refreshTokenExpiresAt,
+            }),
+        );
         return true;
     } catch (err) {
         await recordTokenFailure(shopDomain, err);
         throw err;
     } finally {
         await releaseRefreshLock(shopDomain, lockValue);
+    }
+}
+
+// If the database fails while we save NEW tokens, try again a few times. Saving the newest tokens
+// avoids a second, needless refresh. (If every try fails, nothing is lost: Shopify keeps the refresh
+// token we still hold usable until the newer one is used.)
+const SAVE_RETRY_DELAYS_MS = [300, 1000];
+
+async function saveWithRetry<T>(shopDomain: string, save: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await save();
+        } catch (err) {
+            if (attempt >= SAVE_RETRY_DELAYS_MS.length) {
+                console.error(
+                    `[token-refresh] the new tokens for ${shopDomain} could NOT be saved after ${attempt + 1} tries. ` +
+                    'Shopify keeps the refresh token we still hold usable until the new one is used, so the next refresh normally still works. Check the database.',
+                    err,
+                );
+                throw err;
+            }
+            await new Promise((resolve) => setTimeout(resolve, SAVE_RETRY_DELAYS_MS[attempt]));
+        }
     }
 }
 
@@ -152,16 +201,18 @@ async function performRefresh(shopDomain: string, idToken?: string): Promise<voi
 
     const fallBackToExchange = async (reason: string): Promise<void> => {
         if (!idToken) {
-            throw new Error(`${reason} for ${shopDomain}; merchant must reopen the app`);
+            throw new ReauthorizationRequiredError(`${reason} for ${shopDomain}; merchant must reopen the app`);
         }
         const tokenResult = await exchangeOfflineToken(shopDomain, idToken);
-        await saveOfflineToken({
-            shopDomain,
-            accessTokenEncrypted: encryptToken(tokenResult.accessToken),
-            accessTokenExpiresAt: tokenResult.expiresAt,
-            refreshTokenEncrypted: tokenResult.refreshToken ? encryptToken(tokenResult.refreshToken) : null,
-            refreshTokenExpiresAt: tokenResult.refreshTokenExpiresAt,
-        });
+        await saveWithRetry(shopDomain, () =>
+            saveOfflineToken({
+                shopDomain,
+                accessTokenEncrypted: encryptToken(tokenResult.accessToken),
+                accessTokenExpiresAt: tokenResult.expiresAt,
+                refreshTokenEncrypted: tokenResult.refreshToken ? encryptToken(tokenResult.refreshToken) : null,
+                refreshTokenExpiresAt: tokenResult.refreshTokenExpiresAt,
+            }),
+        );
     };
 
     if (!store.refresh_token_encrypted) {
@@ -181,13 +232,16 @@ async function performRefresh(shopDomain: string, idToken?: string): Promise<voi
     }
 
     // A refresh is not an install, so it uses its own save (tokens only).
-    const saved = await saveRefreshedTokens({
-        shopDomain,
-        accessTokenEncrypted: encryptToken(result.data.accessToken),
-        accessTokenExpiresAt: result.data.expiresAt,
-        refreshTokenEncrypted: result.data.refreshToken ? encryptToken(result.data.refreshToken) : null,
-        refreshTokenExpiresAt: result.data.refreshTokenExpiresAt,
-    });
+    const saved = await saveWithRetry(shopDomain, () =>
+        saveRefreshedTokens({
+            shopDomain,
+            accessTokenEncrypted: encryptToken(result.data.accessToken),
+            accessTokenExpiresAt: result.data.expiresAt,
+            refreshTokenEncrypted: result.data.refreshToken ? encryptToken(result.data.refreshToken) : null,
+            refreshTokenExpiresAt: result.data.refreshTokenExpiresAt,
+        }),
+    );
+
     if (!saved) {
         // The shop was uninstalled while we were refreshing. The new tokens are thrown away.
         console.log(`[token-refresh] ${shopDomain} was uninstalled during the refresh; the new tokens were not saved`);
@@ -195,11 +249,17 @@ async function performRefresh(shopDomain: string, idToken?: string): Promise<voi
 }
 
 async function refreshWithLock(shopDomain: string, skipIfFresh: boolean, idToken?: string): Promise<void> {
-    const lockValue = await acquireRefreshLock(shopDomain);
+    let lockValue = await acquireRefreshLock(shopDomain);
 
     if (!lockValue) {
+        // Another request is refreshing. Wait for it, then look at what it did.
         await waitForLockRelease(shopDomain);
-        return;
+        const afterWait = await findByShopDomain(shopDomain);
+        if (afterWait && !isExpiringSoon(afterWait.access_token_expires_at)) return; // it finished: use its tokens
+
+        // Still not fresh: the other request failed or is too slow. Try to do it ourselves, once.
+        lockValue = await acquireRefreshLock(shopDomain);
+        if (!lockValue) throw new TokenRefreshBusyError(shopDomain);
     }
 
     try {
@@ -258,6 +318,11 @@ interface AdminApiCallResult<T> {
     data: T;
 }
 
+// Any HTTP error from Shopify (403, 429, 5xx, ...) is an error for the caller, not a normal answer.
+function assertAdminApiOk(shopDomain: string, status: number): void {
+    if (status >= 400) throw new AdminApiRequestError(shopDomain, status);
+}
+
 export async function callAdminApi<T>(
     shopDomain: string,
     fn: (accessToken: string) => Promise<AdminApiCallResult<T>>,
@@ -265,8 +330,10 @@ export async function callAdminApi<T>(
 ): Promise<T> {
     const token = await getValidOfflineAccessToken(shopDomain, idToken);
     const first = await runAdminApiCall(shopDomain, fn, token);
-    if (first.status !== 401) return first.data;
-
+    if (first.status !== 401) {
+        assertAdminApiOk(shopDomain, first.status);
+        return first.data;
+    }
     await forceRefresh(shopDomain, idToken);
     const retryToken = await getValidOfflineAccessToken(shopDomain, idToken);
     const second = await runAdminApiCall(shopDomain, fn, retryToken);
@@ -275,5 +342,6 @@ export async function callAdminApi<T>(
     if (second.status === 401) {
         throw new AdminApiAuthError(shopDomain);
     }
+    assertAdminApiOk(shopDomain, second.status);
     return second.data;
 }

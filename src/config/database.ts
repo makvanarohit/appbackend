@@ -10,6 +10,7 @@ export const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   namedPlaceholders: true,
+  connectTimeout: 10_000,
   // How JavaScript Date objects are converted to and from MySQL DATETIME.
   // 'Z' = always UTC, whatever time zone this computer is set to.
   timezone: 'Z',

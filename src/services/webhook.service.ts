@@ -2,6 +2,8 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { pool } from '../config/database';
 import { findByShopDomain, markUninstalled, hardDeleteStore } from '../repositories/store.repository';
 import { handleShopUpdateWebhook } from './shop-details.service';
+import { handleOrderWebhook, handleThemeUpdateWebhook } from './order-webhook.service';
+import { checkAppStillInstalled } from './app-installation.service';
 
 interface WebhookInput {
     webhookId: string;
@@ -105,12 +107,21 @@ async function dispatch(
             break;
 
         case 'SHOP_REDACT': {
-            const deleted = await hardDeleteStore(shopDomain);
-            if (!deleted) {
-                console.warn(
-                    `[gdpr] shop/redact for ${shopDomain} skipped: shop is installed again, data kept`,
-                );
+            const store = await findByShopDomain(shopDomain);
+            if (store && (store.installation_status === 'installed' || store.installation_status === 'reinstalled')) {
+                // The database says the app is installed. Either the uninstall webhook was lost, or the
+                // merchant installed the app again and is using it. Ask Shopify before deleting anything.
+                const check = await checkAppStillInstalled(shopDomain);
+                if (check === 'installed') {
+                    console.warn(`[gdpr] shop/redact for ${shopDomain}: Shopify says the app is installed (installed again?), data kept`);
+                    break;
+                }
+                if (check === 'unknown') {
+                    // Not sure. Do not delete and do not mark the event completed: the queue tries again.
+                    throw new Error(`shop/redact for ${shopDomain}: could not confirm with Shopify that the app is gone; will try again`);
+                }
             }
+            await hardDeleteStore(shopDomain);
             break;
         }
 
@@ -128,7 +139,23 @@ async function dispatch(
             await handleShopUpdateWebhook(shopDomain);
             break;
 
+        case 'ORDERS_CREATE':
+        case 'ORDERS_UPDATED':
+        case 'ORDERS_FULFILLED':
+        case 'ORDERS_CANCELLED':
+            await handleOrderWebhook(topic, shopDomain, payload);
+            // An order can hold personal data (name, email, address). Wipe the saved copy once handled.
+            // (If the handler fails, the payload stays, because the retry needs it.)
+            await redactStoredPayload(eventId);
+            break;
+
+        case 'THEMES_UPDATE':
+            await handleThemeUpdateWebhook(shopDomain, payload);
+            break;
+
         default:
+            // Not an error, but say it: a topic you subscribed to and nobody handles is easy to miss.
+            console.warn(`[webhook] no handler for topic ${topic} (event ${eventId}); marked completed`);
             break;
     }
 }

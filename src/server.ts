@@ -64,6 +64,12 @@ async function main(): Promise<void> {
         console.log(`Server listening on port ${env.port} (${env.appEnv})`);
     });
 
+    // Keep idle connections open LONGER than the load balancer does (AWS ALB: 60 seconds). If Node closes
+    // them first (its default is 5 seconds), the load balancer can send a request into a closing
+    // connection and you get a random 502. headersTimeout must be bigger than keepAliveTimeout.
+    server.keepAliveTimeout = 65_000;
+    server.headersTimeout = 66_000;
+
     // Graceful shutdown: stop the timers, stop taking new requests, let the running
     // requests and webhook jobs finish, then close the connections cleanly.
     let shuttingDown = false;

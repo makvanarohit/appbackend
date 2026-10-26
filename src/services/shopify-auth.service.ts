@@ -16,6 +16,9 @@ export interface IdTokenPayload {
 
 export class InvalidIdTokenError extends Error { }
 
+// A shop is always <shop name>.myshopify.com. The name goes into URLs we call, so check its shape.
+const SHOP_HOST_PATTERN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
+
 function safeHostname(url: string): string | null {
     try {
         return new URL(url).hostname;
@@ -42,6 +45,14 @@ export function validateIdToken(idToken: string): IdTokenPayload {
     const destHost = safeHostname(payload.dest);
     if (!issuerHost || !destHost || issuerHost !== destHost) {
         throw new InvalidIdTokenError('Token issuer and destination do not match');
+    }
+
+    // Shopify always sends exp and nbf. A token without them would never end, so refuse it.
+    if (typeof payload.exp !== 'number' || typeof payload.nbf !== 'number') {
+        throw new InvalidIdTokenError('Token has no exp or nbf');
+    }
+    if (!SHOP_HOST_PATTERN.test(destHost)) {
+        throw new InvalidIdTokenError('Token destination is not a myshopify.com shop');
     }
 
     return payload;
@@ -183,6 +194,11 @@ export async function refreshOfflineToken(
         expires_in?: number;
         refresh_token_expires_in?: number;
     };
+
+    // An answer without an access token is useless. Say it clearly and save nothing.
+    if (typeof json.access_token !== 'string' || json.access_token === '') {
+        throw new Error(`Shopify's refresh answer for ${shopDomain} had no access token`);
+    }
 
     return {
         outcome: 'refreshed',

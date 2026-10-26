@@ -3,12 +3,11 @@ import { handleWebhook } from '../controllers/webhook.controller';
 
 const router = Router();
 
-// The biggest webhook body we accept. Express only accepts 100 KB by default,
-// and a bigger body is refused with 413, so Shopify sees an error and the event
-// can be lost. Shopify does not publish a fixed maximum size (some bodies, like
-// orders, can pass 1 MB). Our topics today are small. If you subscribe to big
-// topics later, raise this value.
-const WEBHOOK_BODY_LIMIT = '1mb';
+// The biggest webhook body we accept. Express only accepts 100 KB by default, and a bigger
+// body is refused with 413. That is bad for two reasons: Shopify sees an error, and a refused
+// request counts as a FAILED request in the webhook rate limit (see middleware/rate-limit.ts).
+// Order webhooks can be big when they have many line items (use include_fields to keep them small).
+const WEBHOOK_BODY_LIMIT = '5mb';
 
 // text({ type: '*/*' }) keeps the body as the raw string Shopify signed.
 // Never put express.json() in front of this route.

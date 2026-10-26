@@ -33,6 +33,7 @@ export function scheduleCleanupWebhookEventsJob(): CronJob {
         cronTime: '0 4 * * *', // every day at 04:00, one hour after the token refresh job
         onTick: cleanupWebhookEvents,
         start: true,
+        waitForCompletion: true, // stop() waits for a run that is busy right now
         errorHandler: (err) => {
             console.error('[cleanup-webhook-events] job crashed:', err);
         },

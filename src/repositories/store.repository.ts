@@ -102,8 +102,8 @@ export async function saveRefreshedTokens(input: SaveOfflineTokenInput): Promise
        access_token_encrypted = :accessTokenEncrypted,
        access_token_issued_at = NOW(),
        access_token_expires_at = :accessTokenExpiresAt,
-       refresh_token_encrypted = :refreshTokenEncrypted,
-       refresh_token_expires_at = :refreshTokenExpiresAt,
+       refresh_token_encrypted = COALESCE(:refreshTokenEncrypted, refresh_token_encrypted),
+       refresh_token_expires_at = COALESCE(:refreshTokenExpiresAt, refresh_token_expires_at),
        token_encryption_key_id = :tokenEncryptionKeyId,
        last_token_exchange_at = NOW(),
        last_token_exchange_status = 'success',
@@ -156,17 +156,10 @@ export async function markUninstalled(shopDomain: string, triggeredAt: Date | nu
     );
 }
 
-// Used for shop/redact. Only deletes a shop that is NOT an active install.
-// If the merchant reinstalled before this webhook was handled, the row is
-// kept and this returns false. 'pending' rows are safe to delete: they never
-// finished installing, so they hold no tokens or settings.
+// Deletes the shop row (its webhook rows go with it). The caller decides if a shop may be deleted:
+// see the SHOP_REDACT case in webhook.service.ts. Returns false when there was no row.
 export async function hardDeleteStore(shopDomain: string): Promise<boolean> {
-    const [result] = await pool.query<ResultSetHeader>(
-        `DELETE FROM stores
-     WHERE shop_domain = :shopDomain
-       AND installation_status IN ('uninstalled', 'pending')`,
-        { shopDomain },
-    );
+    const [result] = await pool.query<ResultSetHeader>('DELETE FROM stores WHERE shop_domain = :shopDomain', { shopDomain });
     return result.affectedRows > 0;
 }
 
@@ -198,10 +191,32 @@ export async function findShopsWithExpiringRefreshToken(withinDays: number): Pro
         `SELECT shop_domain FROM stores
      WHERE installation_status IN ('installed', 'reinstalled')
        AND refresh_token_encrypted IS NOT NULL
+       AND refresh_token_expires_at >= NOW()
        AND refresh_token_expires_at < DATE_ADD(NOW(), INTERVAL :withinDays DAY)`,
         { withinDays },
     );
     return rows.map((row) => row.shop_domain as string);
+}
+
+// The message saved on a shop whose refresh token has ended. Only the merchant can repair it
+// (by opening the app again), so the nightly job must not keep trying.
+export const REFRESH_TOKEN_EXPIRED_MESSAGE = 'Refresh token expired; the merchant must open the app again';
+
+// Marks every installed shop whose refresh token has ended, ONCE (a shop that is already
+// marked is skipped). Returns how many shops were newly marked.
+export async function markExpiredRefreshTokens(): Promise<number> {
+    const [result] = await pool.query<ResultSetHeader>(
+        `UPDATE stores SET
+       last_token_exchange_at = NOW(),
+       last_token_exchange_status = 'failed',
+       last_token_exchange_error = :message
+     WHERE installation_status IN ('installed', 'reinstalled')
+       AND refresh_token_encrypted IS NOT NULL
+       AND refresh_token_expires_at < NOW()
+       AND (last_token_exchange_error IS NULL OR last_token_exchange_error <> :message)`,
+        { message: REFRESH_TOKEN_EXPIRED_MESSAGE },
+    );
+    return result.affectedRows;
 }
 
 // Rows still 'received' after a few minutes — the queue add failed after
@@ -294,4 +309,17 @@ export async function updateShopDetails(shopDomain: string, details: ShopDetails
         console.warn(`[shop-details] shopify_shop_id ${details.shopifyShopId} is already used by another row; saved the rest for ${shopDomain}`);
         await pool.query(buildSql(false), { shopDomain, ...details });
     }
+}
+
+// Events that ended as 'failed' (the queue used all its tries) and are old enough to try again,
+// but not so old that trying again makes no sense.
+export async function findRetryableFailedWebhookEventIds(olderThanMinutes: number, maxAgeHours: number): Promise<number[]> {
+    const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM webhook_events
+     WHERE status = 'failed'
+       AND received_at < DATE_SUB(NOW(), INTERVAL :olderThanMinutes MINUTE)
+       AND received_at > DATE_SUB(NOW(), INTERVAL :maxAgeHours HOUR)`,
+        { olderThanMinutes, maxAgeHours },
+    );
+    return rows.map((row) => row.id as number);
 }

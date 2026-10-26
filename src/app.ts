@@ -32,7 +32,14 @@ export function createApp() {
         }),
     );
 
-    app.use(morgan(env.appEnv === 'local' ? 'dev' : 'combined'));
+    // Log the path only. The query string can hold private data (for example the App Proxy
+    // signature and logged_in_customer_id).
+    morgan.token('path-only', (req) => ((req as { originalUrl?: string }).originalUrl ?? req.url ?? '').split('?')[0]);
+    const logFormat =
+        env.appEnv === 'local'
+            ? ':method :path-only :status :response-time ms - :res[content-length]'
+            : ':remote-addr - :remote-user [:date[clf]] ":method :path-only HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"';
+    app.use(morgan(logFormat));
     app.use(compression());
     app.use(cors({ origin: env.corsOrigins }));
 
