@@ -26,7 +26,11 @@ export async function handleWebhook(req: Request, res: Response): Promise<void> 
     }
     // X-Shopify-Triggered-At is an RFC 3339 timestamp.
     const triggeredAtHeader = req.get('X-Shopify-Triggered-At');
-    const triggeredAt = triggeredAtHeader ? new Date(triggeredAtHeader) : null;
+    const parsedTriggeredAt = triggeredAtHeader ? new Date(triggeredAtHeader) : null;
+    // Invalid optional metadata must not make a valid webhook retry forever.
+    const triggeredAt = parsedTriggeredAt && !Number.isNaN(parsedTriggeredAt.getTime())
+        ? parsedTriggeredAt
+        : null;
     // 1. Save first. If this fails we answer 500, so Shopify retries later.
     let eventId: number | null;
     try {

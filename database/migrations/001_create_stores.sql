@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS stores (
 
   installed_at DATETIME NULL,
   first_installed_at DATETIME NULL,
-  last_installed_at DATETIME NULL,
-  uninstalled_at DATETIME NULL,
+  last_installed_at DATETIME(6) NULL,
+  uninstalled_at DATETIME(6) NULL,
   last_seen_at DATETIME NULL,
 
   onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE,

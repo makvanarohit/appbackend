@@ -10,6 +10,25 @@ function required(name: string): string {
     return value;
 }
 
+function requiredAppHost(): string {
+    const value = required('APP_HOST').trim().toLowerCase();
+    if (!value || value.includes('://') || value.includes('/') || value.includes('\\') ||
+        value.includes('?') || value.includes('#') || value.includes('@') || value.includes(':') ||
+        value.startsWith('<') || value.endsWith('>') || value.includes('your-app-host')) {
+        throw new Error('APP_HOST must be a real hostname only (without protocol, port, path, or placeholder text)');
+    }
+    let parsed: URL;
+    try {
+        parsed = new URL(`https://${value}`);
+    } catch {
+        throw new Error('APP_HOST is not a valid hostname');
+    }
+    if (parsed.hostname !== value || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+        throw new Error('APP_HOST must be a real hostname only (without protocol, port, path, or placeholder text)');
+    }
+    return value;
+}
+
 // Reads a whole number from the environment and checks the range.
 // Blank or missing -> uses the default. Wrong value -> the app stops with a clear message.
 function intFromEnv(name: string, fallback: number, min: number, max: number): number {
@@ -122,7 +141,7 @@ export const env = {
 
     shopifyClientId: required('SHOPIFY_CLIENT_ID'),
     shopifyClientSecret: required('SHOPIFY_CLIENT_SECRET'),
-    appHost: required('APP_HOST'),
+    appHost: requiredAppHost(),
 
     db: {
         host: required('DB_HOST'),

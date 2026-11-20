@@ -58,10 +58,13 @@ interface SaveOfflineTokenInput {
     accessTokenExpiresAt: Date | null;
     refreshTokenEncrypted: string | null;
     refreshTokenExpiresAt: Date | null;
+    // When the token exchange started. If the shop was uninstalled AFTER this moment, the new tokens are not saved.
+    requestStartedAt?: Date;
 }
 
-export async function saveOfflineToken(input: SaveOfflineTokenInput): Promise<void> {
-    await pool.query(
+// Returns false when nothing was saved because the shop was uninstalled while the exchange was running.
+export async function saveOfflineToken(input: SaveOfflineTokenInput): Promise<boolean> {
+    const [result] = await pool.query<ResultSetHeader>(
         `UPDATE stores SET
        access_token_encrypted = :accessTokenEncrypted,
        access_token_issued_at = NOW(),
@@ -75,13 +78,18 @@ export async function saveOfflineToken(input: SaveOfflineTokenInput): Promise<vo
        installation_status = IF(installation_status = 'uninstalled', 'reinstalled', 'installed'),
        installed_at = COALESCE(installed_at, NOW()),
        first_installed_at = COALESCE(first_installed_at, NOW()),
-       last_installed_at = NOW(),
+       last_installed_at = :installTimestamp,
        last_seen_at = NOW(),
        app_status = 'enabled',
        uninstalled_at = NULL
-     WHERE shop_domain = :shopDomain`,
+     WHERE shop_domain = :shopDomain
+       AND (installation_status <> 'uninstalled' OR uninstalled_at IS NULL OR uninstalled_at <= :requestStartedAt)`,
         {
             shopDomain: input.shopDomain,
+            // Use when the token exchange began, not when it finished. Otherwise a
+            // slow pre-uninstall exchange could look newer than the uninstall webhook.
+            requestStartedAt: input.requestStartedAt ?? new Date(0),
+            installTimestamp: input.requestStartedAt ?? new Date(),
             accessTokenEncrypted: input.accessTokenEncrypted,
             accessTokenExpiresAt: input.accessTokenExpiresAt,
             refreshTokenEncrypted: input.refreshTokenEncrypted,
@@ -89,6 +97,7 @@ export async function saveOfflineToken(input: SaveOfflineTokenInput): Promise<vo
             tokenEncryptionKeyId: env.tokenEncryptionKeyId,
         },
     );
+    return result.affectedRows > 0;
 }
 
 // Saves tokens that came from a REFRESH (not from an install or a new authorization).
@@ -141,7 +150,7 @@ export async function markUninstalled(shopDomain: string, triggeredAt: Date | nu
         `UPDATE stores SET
        installation_status = 'uninstalled',
        app_status = 'disabled',
-       uninstalled_at = NOW(),
+       uninstalled_at = COALESCE(:triggeredAt, NOW(6)),
        access_token_encrypted = NULL,
        refresh_token_encrypted = NULL,
        access_token_expires_at = NULL,

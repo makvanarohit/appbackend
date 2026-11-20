@@ -9,6 +9,8 @@ export const pool = mysql.createPool({
   database: env.db.database,
   waitForConnections: true,
   connectionLimit: 10,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
   namedPlaceholders: true,
   connectTimeout: 10_000,
   // How JavaScript Date objects are converted to and from MySQL DATETIME.

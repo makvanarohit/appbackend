@@ -132,6 +132,10 @@ export async function exchangeOfflineToken(
     if (!session.accessToken) {
         throw new Error(`Token exchange for ${shopDomain} returned no access token`);
     }
+    // We ask for an EXPIRING token. Without the expiry and refresh fields the token lifecycle cannot work.
+    if (!session.expires || !session.refreshToken || !session.refreshTokenExpires) {
+        throw new Error(`Token exchange for ${shopDomain} did not return the expiring offline token fields`);
+    }
 
     return {
         accessToken: session.accessToken,
@@ -188,27 +192,42 @@ export async function refreshOfflineToken(
     if (response.status === 429 || response.status >= 500) return { outcome: 'retry' };
     if (!response.ok) return { outcome: 'failed' };
 
-    const json = (await response.json()) as {
-        access_token: string;
-        refresh_token?: string;
-        expires_in?: number;
-        refresh_token_expires_in?: number;
+    let json: {
+        access_token?: unknown;
+        refresh_token?: unknown;
+        expires_in?: unknown;
+        refresh_token_expires_in?: unknown;
     };
-
-    // An answer without an access token is useless. Say it clearly and save nothing.
-    if (typeof json.access_token !== 'string' || json.access_token === '') {
-        throw new Error(`Shopify's refresh answer for ${shopDomain} had no access token`);
+    try {
+        json = (await response.json()) as typeof json;
+    } catch {
+        return { outcome: 'failed' };
     }
 
+    // Shopify rotates both tokens on every successful expiring-token refresh.
+    // Do not save a partial response: retaining the previous refresh token or its
+    // expiry alongside a newly issued access token can break the next refresh.
+    const isNonEmptyString = (value: unknown): value is string =>
+        typeof value === 'string' && value.trim().length > 0;
+    const isPositiveNumber = (value: unknown): value is number =>
+        typeof value === 'number' && Number.isFinite(value) && value > 0;
+    if (
+        !isNonEmptyString(json.access_token) ||
+        !isNonEmptyString(json.refresh_token) ||
+        !isPositiveNumber(json.expires_in) ||
+        !isPositiveNumber(json.refresh_token_expires_in)
+    ) {
+        return { outcome: 'failed' };
+    }
+
+    const now = Date.now();
     return {
         outcome: 'refreshed',
         data: {
             accessToken: json.access_token,
-            expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1000) : null,
-            refreshToken: json.refresh_token ?? null,
-            refreshTokenExpiresAt: json.refresh_token_expires_in
-                ? new Date(Date.now() + json.refresh_token_expires_in * 1000)
-                : null,
+            expiresAt: new Date(now + json.expires_in * 1000),
+            refreshToken: json.refresh_token,
+            refreshTokenExpiresAt: new Date(now + json.refresh_token_expires_in * 1000),
         },
     };
 }

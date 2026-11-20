@@ -148,16 +148,20 @@ export async function ensureOfflineToken(shopDomain: string, idToken: string): P
             return false;
         }
 
+        const requestStartedAt = new Date();
         const tokenResult = await exchangeOfflineToken(shopDomain, idToken);
-        await saveWithRetry(shopDomain, () =>
+        const saved = await saveWithRetry(shopDomain, () =>
             saveOfflineToken({
                 shopDomain,
+                requestStartedAt,
                 accessTokenEncrypted: encryptToken(tokenResult.accessToken),
                 accessTokenExpiresAt: tokenResult.expiresAt,
                 refreshTokenEncrypted: tokenResult.refreshToken ? encryptToken(tokenResult.refreshToken) : null,
                 refreshTokenExpiresAt: tokenResult.refreshTokenExpiresAt,
             }),
         );
+        // false = the shop was uninstalled while the exchange was running; the new tokens were not saved.
+        if (!saved) throw new Error(`Store ${shopDomain} was uninstalled while the token exchange was in progress`);
         return true;
     } catch (err) {
         await recordTokenFailure(shopDomain, err);
@@ -203,16 +207,19 @@ async function performRefresh(shopDomain: string, idToken?: string): Promise<voi
         if (!idToken) {
             throw new ReauthorizationRequiredError(`${reason} for ${shopDomain}; merchant must reopen the app`);
         }
+        const requestStartedAt = new Date();
         const tokenResult = await exchangeOfflineToken(shopDomain, idToken);
-        await saveWithRetry(shopDomain, () =>
+        const saved = await saveWithRetry(shopDomain, () =>
             saveOfflineToken({
                 shopDomain,
+                requestStartedAt,
                 accessTokenEncrypted: encryptToken(tokenResult.accessToken),
                 accessTokenExpiresAt: tokenResult.expiresAt,
                 refreshTokenEncrypted: tokenResult.refreshToken ? encryptToken(tokenResult.refreshToken) : null,
                 refreshTokenExpiresAt: tokenResult.refreshTokenExpiresAt,
             }),
         );
+        if (!saved) throw new Error(`Store ${shopDomain} was uninstalled while the token exchange was in progress`);
     };
 
     if (!store.refresh_token_encrypted) {
