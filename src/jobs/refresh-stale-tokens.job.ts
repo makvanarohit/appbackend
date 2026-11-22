@@ -39,6 +39,7 @@ export function scheduleRefreshStaleTokensJob(): CronJob {
         cronTime: '0 3 * * *',
         onTick: refreshStaleTokens,
         start: true,
+        timeZone: 'UTC',
         waitForCompletion: true, // stop() waits for a run that is busy right now
         errorHandler: (err) => {
             console.error('[refresh-stale-tokens] job crashed:', err);

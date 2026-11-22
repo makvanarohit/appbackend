@@ -19,8 +19,8 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   PRIMARY KEY (id),
   UNIQUE KEY uq_webhook_events_webhook_id (shopify_webhook_id),
   KEY idx_webhook_events_store_id (store_id),
-  KEY idx_webhook_events_topic (topic),
   KEY idx_webhook_events_status_received (status, received_at),
+  KEY idx_webhook_events_shop_topic (shop_domain, topic),
 
   CONSTRAINT fk_webhook_events_store
     FOREIGN KEY (store_id)

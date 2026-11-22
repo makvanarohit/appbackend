@@ -44,6 +44,14 @@ async function main(): Promise<void> {
     await connectRedis();
     console.log('Redis connected');
 
+    if ((env.appEnv === 'staging' || env.appEnv === 'production') && env.trustProxy === 0) {
+        console.warn(
+            `[config] TRUST_PROXY=0 on ${env.appEnv}. Behind a load balancer or reverse proxy, ` +
+            'every request will look like it comes from the proxy IP, so the rate limiter will treat ' +
+            'all users as one. Set TRUST_PROXY to the number of proxies in front of the app.',
+        );
+    }
+
     // We keep the cron jobs, so the shutdown can stop them.
     const cronJobs: Array<{ stop: () => unknown }> = [];
 

@@ -72,6 +72,7 @@ export function scheduleRequeueStuckWebhooksJob(): CronJob {
       await requeueFailedWebhooks();
     },
     start: true,
+    timeZone: 'UTC',
     waitForCompletion: true, // stop() waits for a run that is busy right now
     errorHandler: (err) => {
       console.error('[requeue-stuck-webhooks] job crashed:', err);

@@ -492,7 +492,7 @@ Every error that reaches `middleware/error-handler.ts` writes **one** entry in t
 6. If a key leaked, do not wait. Rotate now and ask merchants to reopen the app, or re-encrypt every row with a one-time script.
 # Important about your current setup
 
-# Keep TOKEN_ENCRYPTION_KEY_ID=v1 with your current key the first time you use this code. That way nothing changes for tokens you already have. If your real .env has a different id such as v2 and you already saved tokens, tell me first, because old tokens would be read with the wrong key id.
+# Keep TOKEN_ENCRYPTION_KEY_ID=v1 with your current key the first time you use this code. That way nothing changes for tokens you already have. If your real .env has a different id such as v2 and you already saved tokens, because old tokens would be read with the wrong key id.
 
 
 ### 7.8 Token refresh
@@ -945,7 +945,6 @@ It does **not** work for live data, such as "how many slots are left on this dat
 Found by the audit of 15 October 2026 and **not done on purpose** (they are not bugs today):
 
 - **Several server copies.** The cron jobs, the worker and the rate limit counters run inside every copy. With 2 or more copies the jobs run twice. Before you scale out, run the cron jobs through BullMQ repeatable jobs (or a Redis lock) and use a Redis store for the rate limit.
-- **A new exchange that ends after an uninstall.** `saveOfflineToken` has no uninstall check (the refresh save has one). The window is a few seconds and Shopify refuses exchanges for uninstalled apps, so the risk is small.
 - **Two exchanges at nearly the same time.** After a 10 second timeout, a late answer from Shopify can retire the token of a second exchange. This needs Shopify to be more than 10 seconds late.
 - **Rate limit per shop** (today it is per IP, and merchants can share an IP).
 - **Better logging** (pino with redaction and request ids) and an error tracker.

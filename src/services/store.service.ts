@@ -5,7 +5,7 @@ import { findByShopDomain, findOrCreateByShopDomain, saveOfflineToken, saveRefre
 
 // Must comfortably exceed the slowest thing it can protect: a refresh
 // call (up to 30s) possibly followed by a fallback exchange call.
-const REFRESH_LOCK_TTL_MS = 45_000;
+const REFRESH_LOCK_TTL_MS = 90_000;
 const REFRESH_LOCK_WAIT_MS = 5_000;
 const EXPIRY_BUFFER_MS = 60_000;
 
@@ -341,7 +341,14 @@ export async function callAdminApi<T>(
         assertAdminApiOk(shopDomain, first.status);
         return first.data;
     }
-    await forceRefresh(shopDomain, idToken);
+    // A 401 means the token we used was rejected. Another request may already have
+    // refreshed it, so only refresh if the stored token is still the one that failed.
+    const current = await findByShopDomain(shopDomain);
+    const stillSameToken =
+        !!current?.access_token_encrypted && decryptToken(current.access_token_encrypted) === token;
+    if (stillSameToken) {
+        await forceRefresh(shopDomain, idToken);
+    }
     const retryToken = await getValidOfflineAccessToken(shopDomain, idToken);
     const second = await runAdminApiCall(shopDomain, fn, retryToken);
 
