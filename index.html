@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+
+  <!-- ============================================ -->
+  <!-- Viewport — required for responsive layout   -->
+  <!-- ============================================ -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- ============================================ -->
+  <!-- Favicon                                      -->
+  <!-- ============================================ -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+  <!-- ============================================ -->
+  <!-- App title                                    -->
+  <!-- ============================================ -->
+  <title>My Shopify App</title>
+
+  <!-- ============================================ -->
+  <!-- IMPORTANT: Content Security Policy           -->
+  <!-- Required for embedded Shopify apps           -->
+  <!-- Allows Shopify admin to load app in iframe   -->
+  <!-- ============================================ -->
+  <!-- <meta http-equiv="Content-Security-Policy" content="frame-ancestors https://admin.shopify.com https://*.myshopify.com;" /> -->
+
+  <!-- ============================================ -->
+  <!-- Prevent search engines from indexing         -->
+  <!-- Embedded apps don't need to be indexed       -->
+  <!-- ============================================ -->
+  <meta name="robots" content="noindex, nofollow" />
+
+  <!-- ============================================ -->
+  <!-- Shopify API key                              -->
+  <!-- Read by App Bridge to configure the session  -->
+  <!-- Vite replaces %VITE_SHOPIFY_API_KEY% with the -->
+  <!-- value from your .env file at build/serve time -->
+  <!-- ============================================ -->
+  <meta name="shopify-api-key" content="%VITE_SHOPIFY_API_KEY%" />
+
+  <!-- ============================================ -->
+  <!-- App Bridge CDN script                        -->
+  <!-- Loads App Bridge before React initializes    -->
+  <!-- Required for embedded app communication      -->
+  <!-- Also provides the <s-app-nav> chrome element -->
+  <!-- ============================================ -->
+  <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+
+  <!-- ============================================ -->
+  <!-- Polaris web components CDN script            -->
+  <!-- Registers all <s-*> custom elements (Page,   -->
+  <!-- Button, TextField, etc). Unversioned — always -->
+  <!-- serves the latest Polaris release.           -->
+  <!-- ============================================ -->
+  <script src="https://cdn.shopify.com/shopifycloud/polaris.js"></script>
+</head>
+
+<body>
+  <!-- ============================================ -->
+  <!-- React mounts here                            -->
+  <!-- ============================================ -->
+  <div id="root"></div>
+
+  <!-- ============================================ -->
+  <!-- Vite entry point                             -->
+  <!-- ============================================ -->
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>

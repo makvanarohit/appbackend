@@ -1,0 +1,281 @@
+/* ============================================
+   Global styles
+   Kept intentionally minimal — Polaris web
+   components style themselves (typography,
+   colors, spacing) once polaris.js loads, based
+   on the merchant's admin theme. This file just
+   makes sure the app fills the embedded iframe
+   correctly; it does not (and should not) try to
+   override component styling.
+   ============================================ */
+
+:root {
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+/* ===== STANDALONE MODE (see STANDALONE_MODE_README.md) =====
+   Used by StandaloneSaveBar when a blocked navigation attempt
+   should draw attention to unsaved changes, mirroring the real
+   Shopify admin save bar's shake — not standalone-specific in
+   spirit, just added to support it. Safe to delete this block
+   if standalone mode is removed and nothing else uses it. */
+@keyframes standalone-save-bar-shake {
+  10%,
+  90% {
+    transform: translateX(-1px);
+  }
+
+  20%,
+  80% {
+    transform: translateX(2px);
+  }
+
+  30%,
+  50%,
+  70% {
+    transform: translateX(-4px);
+  }
+
+  40%,
+  60% {
+    transform: translateX(4px);
+  }
+}
+
+.standalone-save-bar-shake {
+  animation: standalone-save-bar-shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+  box-shadow: 0px 0px 10px 0px rgba(0, 0, 0, 0.6);
+  border-radius: 0.75rem;
+}
+
+/* ===== END STANDALONE MODE ===== */
+
+/* Standalone Shopify-admin-style shell. Polaris web components provide
+   the controls; CSS is limited to page framing, save-bar placement and responsiveness. */
+.admin-shell {
+  display: flex;
+  min-height: 100vh;
+  background: #f1f1f1;
+  color: #202223;
+}
+
+.admin-sidebar {
+  box-sizing: border-box;
+  flex: 0 0 220px;
+  width: 220px;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  min-height: 100vh;
+  max-height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: #ebebeb;
+  border-right: 1px solid #dedede;
+  z-index: 20;
+}
+
+.admin-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Three columns keep the save bar at the true horizontal center of the header,
+   independent of the width of the controls at either end. */
+.admin-topbar {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 20px;
+  position: sticky;
+  top: 0;
+  background: #f7f7f7;
+  border-bottom: 1px solid #dedede;
+  z-index: 15;
+}
+
+.admin-topbar-start {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.admin-mobile-menu-trigger {
+  display: none;
+  flex: 0 0 auto;
+}
+
+.admin-mobile-brand {
+  display: none;
+  white-space: nowrap;
+}
+
+.admin-topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.admin-page-content {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 20px 24px 32px;
+  min-width: 0;
+}
+
+.admin-sidebar s-button {
+  width: 100%;
+}
+
+/* Save bar: compact, width-constrained, and precisely centered in the header. */
+.standalone-save-bar-container {
+  box-sizing: border-box;
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  width: min(500px, 42vw);
+  min-width: 0;
+  max-width: 100%;
+  z-index: 2;
+}
+
+.standalone-save-bar-box {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.standalone-save-bar-content,
+.standalone-save-bar-message,
+.standalone-save-bar-actions {
+  min-width: 0;
+}
+
+.standalone-save-bar-message {
+  flex: 1 1 auto;
+}
+
+.standalone-save-bar-label {
+  white-space: nowrap;
+}
+
+.standalone-save-bar-actions {
+  flex: 0 0 auto;
+}
+
+/* Tablet: hide the permanent sidebar and expose the Polaris menu in the header. */
+@media (max-width: 1024px) {
+  .admin-shell {
+    display: flex;
+    flex-direction: row;
+  }
+
+  .admin-sidebar {
+    display: none;
+  }
+
+  .admin-topbar {
+    padding: 8px 16px;
+  }
+
+  .admin-topbar-start {
+    display: flex;
+  }
+
+  .admin-mobile-menu-trigger {
+    display: inline-flex;
+  }
+
+  .admin-mobile-brand {
+    display: block;
+  }
+
+  .admin-page-content {
+    padding: 16px 20px 28px;
+  }
+}
+
+/* Smaller tablets and phones: put the centered save bar on its own header row.
+   This avoids overlapping the menu/brand and right-side actions while remaining
+   horizontally centered inside the header at every narrow viewport size. */
+@media (max-width: 760px) {
+  .admin-topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    column-gap: 8px;
+    row-gap: 8px;
+    padding: 8px 12px;
+  }
+
+  .admin-topbar-start {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .admin-topbar-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .standalone-save-bar-container {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: center;
+    width: min(420px, 100%);
+  }
+
+  .admin-page-content {
+    padding: 12px 16px 24px;
+  }
+}
+
+@media (max-width: 420px) {
+  .admin-topbar {
+    padding: 8px;
+  }
+
+  .admin-topbar-start {
+    gap: 4px;
+  }
+
+  .admin-topbar-actions {
+    gap: 4px;
+  }
+
+  .admin-page-content {
+    padding: 12px;
+  }
+
+  .standalone-save-bar-container {
+    width: 100%;
+  }
+}

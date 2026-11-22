@@ -1,5 +1,23 @@
-node_modules/
-dist/
-.env
-.env.*
+# Environment files
+.env*
+.env.development
+.env.production
+.env.standalone
+.env.local
+
+# Only .env.example should be committed
 !.env.example
+
+# Build output
+dist/
+
+# Node modules
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
