@@ -172,13 +172,6 @@ export async function hardDeleteStore(shopDomain: string): Promise<boolean> {
     return result.affectedRows > 0;
 }
 
-export async function incrementStandaloneTokenVersion(shopDomain: string): Promise<void> {
-    await pool.query(
-        'UPDATE stores SET standalone_token_version = standalone_token_version + 1 WHERE shop_domain = :shopDomain',
-        { shopDomain },
-    );
-}
-
 // Returns false when there is no store row for this shop (GET /api/store has not run yet).
 export async function markOnboardingCompleted(shopDomain: string): Promise<boolean> {
     const [result] = await pool.query<ResultSetHeader>(

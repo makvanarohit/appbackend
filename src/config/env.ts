@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { isIP } from 'node:net';
 
 dotenv.config();
 
@@ -45,7 +46,7 @@ function intFromEnv(name: string, fallback: number, min: number, max: number): n
 }
 
 // APP_ENV says WHICH of your 4 setups this is. It decides the behavior:
-// standalone tokens, error details, log style.
+// error details, log style.
 // NODE_ENV only says "build mode" and is kept for Express and other libraries.
 const APP_ENVS = ['local', 'development', 'staging', 'production'] as const;
 export type AppEnv = (typeof APP_ENVS)[number];
@@ -77,9 +78,6 @@ const nodeEnv = requiredNodeEnv();
 if ((appEnv === 'staging' || appEnv === 'production') && nodeEnv !== 'production') {
     throw new Error(`APP_ENV=${appEnv} requires NODE_ENV=production`);
 }
-
-// Standalone tokens are ONLY for your local machine. Never on a shared server.
-const standaloneEnabled = appEnv === 'local';
 
 // Encryption keys. The ACTIVE key encrypts new tokens. OLD keys are only used
 // to read tokens that were saved before a rotation.
@@ -124,11 +122,86 @@ function loadEncryptionKeys(activeId: string): Map<string, Buffer> {
 const activeKeyId = process.env.TOKEN_ENCRYPTION_KEY_ID ?? 'v1';
 const encryptionKeys = loadEncryptionKeys(activeKeyId);
 
+// ---------- Staff login and support access ----------
+
+// A secret for signing tokens: a base64 text that decodes to at least 32 bytes.
+function secretFromEnv(name: string): Buffer {
+    const key = Buffer.from(required(name), 'base64');
+    if (key.length < 32) {
+        throw new Error(`${name} must be a base64 text that decodes to at least 32 bytes`);
+    }
+    return key;
+}
+
+function boolFromEnv(name: string, fallback: boolean): boolean {
+    const raw = process.env[name];
+    if (raw === undefined || raw.trim() === '') return fallback;
+    const value = raw.trim().toLowerCase();
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    throw new Error(`${name} must be "true" or "false" (got: ${JSON.stringify(raw)})`);
+}
+
+// The address of your frontend, as an origin only (no path). The staff cookie and the CORS check use it.
+function frontendOriginFromEnv(): string {
+    const raw = required('APP_FRONTEND_URL').trim();
+    let url: URL;
+    try {
+        url = new URL(raw);
+    } catch {
+        throw new Error('APP_FRONTEND_URL must be a full address, for example https://app.example.com');
+    }
+    if (
+        (url.protocol !== 'https:' && url.protocol !== 'http:') ||
+        url.pathname !== '/' || url.search || url.hash || url.username || url.password
+    ) {
+        throw new Error('APP_FRONTEND_URL must be an origin only (protocol + host, without a path)');
+    }
+    if ((appEnv === 'staging' || appEnv === 'production') && url.protocol !== 'https:') {
+        throw new Error(`APP_FRONTEND_URL must use https on ${appEnv}`);
+    }
+    return url.origin;
+}
+
+function ipListFromEnv(name: string): string[] {
+    const list = (process.env[name] ?? '').split(',').map((ip) => ip.trim()).filter(Boolean);
+    for (const ip of list) {
+        if (isIP(ip) === 0) throw new Error(`${name} has a value that is not an IP address: ${JSON.stringify(ip)}`);
+    }
+    return list;
+}
+
+// 2FA is required everywhere except on your own computer.
+const staffRequire2fa = boolFromEnv('STAFF_REQUIRE_2FA', true);
+if (!staffRequire2fa && appEnv !== 'local') {
+    throw new Error(`STAFF_REQUIRE_2FA=false is allowed only when APP_ENV=local (APP_ENV is ${appEnv})`);
+}
+
+const staffSessionSecret = secretFromEnv('STAFF_SESSION_SECRET');
+const supportTokenSecret = secretFromEnv('SUPPORT_TOKEN_SECRET');
+
+// Every secret must be different. One leaked secret must never open the others.
+const secretsInUse: Array<[string, string]> = [
+    ['STAFF_SESSION_SECRET', staffSessionSecret.toString('base64')],
+    ['SUPPORT_TOKEN_SECRET', supportTokenSecret.toString('base64')],
+    ['SHOPIFY_CLIENT_SECRET', required('SHOPIFY_CLIENT_SECRET')],
+    ...[...encryptionKeys].map(([id, key]): [string, string] => [`TOKEN_ENCRYPTION_KEY (${id})`, key.toString('base64')]),
+];
+
+for (let i = 0; i < secretsInUse.length; i += 1) {
+    for (let j = i + 1; j < secretsInUse.length; j += 1) {
+        if (secretsInUse[i][1] === secretsInUse[j][1]) {
+            throw new Error(`${secretsInUse[i][0]} and ${secretsInUse[j][0]} must not have the same value`);
+        }
+    }
+}
+
+const staffFrontendOrigin = frontendOriginFromEnv();
+
 export const env = {
     appEnv,
     nodeEnv,
     isProduction: appEnv === 'production',
-    standaloneEnabled,
     // Staging and production must never show internal error messages.
     exposeErrorDetails: appEnv === 'local' || appEnv === 'development',
 
@@ -155,9 +228,18 @@ export const env = {
     tokenEncryptionKeyId: activeKeyId,
     tokenEncryptionKeys: encryptionKeys,
 
-    // Only needed on local. Other environments don't have to carry a useless secret.
-    standaloneTokenSecret: standaloneEnabled ? required('STANDALONE_TOKEN_SECRET') : '',
-    standaloneTokenTtlDays: intFromEnv('STANDALONE_TOKEN_TTL_DAYS', 30, 1, 365),
+    // Staff login and support access ("Open as merchant").
+    staff: {
+        sessionSecret: staffSessionSecret,
+        // The staff login, and every support session, ends this many minutes after login.
+        sessionMinutes: intFromEnv('STAFF_SESSION_MINUTES', 30, 5, 480),
+        require2fa: staffRequire2fa,
+        // Origin of your frontend (the CORS check and the Origin check use it).
+        frontendOrigin: staffFrontendOrigin,
+        // Empty = every IP may reach /internal. Otherwise only these IPs.
+        allowedIps: ipListFromEnv('STAFF_ALLOWED_IPS'),
+    },
+    supportTokenSecret,
 
     redisUrl: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
 

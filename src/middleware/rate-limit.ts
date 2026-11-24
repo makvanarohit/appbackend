@@ -39,5 +39,12 @@ export const webhookLimiter = createRateLimiter({
     countOnlyFailures: true,
 });
 
+// Everything under /internal (staff login and support): 120 requests per minute per IP.
+export const internalLimiter = createRateLimiter({ windowMs: 60 * 1000, limit: 120 });
+
+// The staff login steps (password, 2FA code): 50 per 15 minutes per IP. This stops someone from
+// trying many usernames from one address. Each single account is also locked after 5 wrong tries.
+export const staffLoginLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, limit: 50 });
+
 // For the public extension routes later (/proxy, /ext), make a limiter with createRateLimiter, for example:
 //   export const publicLimiter = createRateLimiter({ windowMs: 60 * 1000, limit: 120 });

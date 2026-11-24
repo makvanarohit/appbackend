@@ -2,13 +2,16 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
+import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
 import { env } from './config/env';
 import routes from './routes';
 import webhookRoutes from './routes/webhook.routes';
+import internalRoutes from './routes/internal.routes';
 import { errorHandler } from './middleware/error-handler';
 import { readiness } from './controllers/health.controller';
-import { apiLimiter, webhookLimiter } from './middleware/rate-limit';
+import { apiLimiter, internalLimiter, webhookLimiter } from './middleware/rate-limit';
+import { internalIpAllowList, requireFrontendOrigin } from './middleware/internal-guard';
 
 export function createApp() {
     const app = express();
@@ -41,6 +44,28 @@ export function createApp() {
             : ':remote-addr - :remote-user [:date[clf]] ":method :path-only HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"';
     app.use(morgan(logFormat));
     app.use(compression());
+
+    // Staff login and support (/internal). These routes use a cookie, so they need their own CORS
+    // (with credentials), their own Origin check, their own body parser and their own cookie parser.
+    // They are mounted BEFORE the global cors() below, because that one does not allow cookies.
+    app.use(
+        '/internal',
+        internalIpAllowList,
+        cors({
+            origin: env.staff.frontendOrigin,
+            credentials: true,
+            methods: ['GET', 'POST', 'PATCH'],
+            allowedHeaders: ['Content-Type'],
+            maxAge: 600,
+        }),
+        internalLimiter,
+        requireFrontendOrigin,
+        express.json({ limit: '10kb' }),
+        cookieParser(),
+        internalRoutes,
+    );
+
+    app.use(cors({ origin: env.corsOrigins }));
     app.use(cors({ origin: env.corsOrigins }));
 
     // Webhooks come from Shopify, not from your frontend: they use their

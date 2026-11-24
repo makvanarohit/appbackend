@@ -14,7 +14,8 @@ export async function initializeStore(
     next: NextFunction,
 ): Promise<void> {
     try {
-        // A standalone token (local testing) can't be exchanged. Its store must already exist.
+        // A support token ("Open as merchant") has no Shopify ID token, so it can't be exchanged.
+        // Its store must already exist, so the exchange is skipped here.
         if (req.authMode === 'shopify-session' && req.shopDomain && req.idToken) {
             const justExchanged = await ensureOfflineToken(req.shopDomain, req.idToken);
 

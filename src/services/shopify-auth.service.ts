@@ -17,7 +17,7 @@ export interface IdTokenPayload {
 export class InvalidIdTokenError extends Error { }
 
 // A shop is always <shop name>.myshopify.com. The name goes into URLs we call, so check its shape.
-const SHOP_HOST_PATTERN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
+export const SHOP_HOST_PATTERN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
 
 function safeHostname(url: string): string | null {
     try {

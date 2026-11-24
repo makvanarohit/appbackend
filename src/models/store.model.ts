@@ -52,7 +52,6 @@ export interface Store {
     refresh_token_expires_at: Date | null;
 
     token_encryption_key_id: string | null;
-    standalone_token_version: number;
 
     last_token_exchange_at: Date | null;
     last_token_exchange_status: TokenExchangeStatus | null;
