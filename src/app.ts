@@ -65,9 +65,7 @@ export function createApp() {
         internalRoutes,
     );
 
-    app.use(cors({ origin: env.corsOrigins }));
-    app.use(cors({ origin: env.corsOrigins }));
-
+    app.use(cors({ origin: env.corsOrigins, exposedHeaders: ['Retry-After'] }));
     // Webhooks come from Shopify, not from your frontend: they use their
     // own body format (raw text, for signature checks) and their own
     // authentication, so they live outside /api.
